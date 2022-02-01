@@ -26,13 +26,8 @@ class Encoder(layers.Layer):
     def call(self, inputs, one_hot_labels, training=False):
         """Forward Pass."""
         input_shape = tf.shape(inputs)
-        # one_hot_labels shape should be (batch, self.num_labels)
         one_hot_labels = one_hot_labels[:, tf.newaxis, tf.newaxis, :]
-        # print(inputs.shape, one_hot_labels.shape)
-        one_hot_labels = tf.tile(
-            one_hot_labels,
-            (1, input_shape[1], input_shape[2], 1),
-        )
+        one_hot_labels = tf.tile(one_hot_labels, (1, input_shape[1], input_shape[2], 1))
         out = tf.concat([inputs, one_hot_labels], axis=-1)
 
         for layer in self.layers:
@@ -40,8 +35,8 @@ class Encoder(layers.Layer):
 
         out = self.flatten(out)
         out = self.latent_proj(out)
-        mean, logvar = tf.split(out, num_or_size_splits=2, axis=1)
 
+        mean, logvar = tf.split(out, num_or_size_splits=2, axis=1)
         eps = tf.random.normal((tf.shape(mean)))
         z = eps * tf.exp(logvar * 0.5) + mean
         return z, mean, logvar
@@ -54,7 +49,7 @@ class Decoder(layers.Layer):
         self.filters = filters
         self.num_layers = num_layers
 
-        self.latent_proj = layers.Dense(7 * 7 * 64)
+        self.latent_proj = layers.Dense(7 * 7 * 64, activation="relu")
         self.layers = [
             layers.Conv2DTranspose(
                 filters=filters if i == 0 else filters * i,
@@ -93,9 +88,6 @@ class ConditionalVAE(tf.keras.Model):
         self.num_labels = num_labels
         self.encoder = Encoder(latent_dim=latent_dim, num_layers=num_layers)
         self.decoder = Decoder(latent_dim=latent_dim, num_layers=num_layers)
-        self.total_loss_tracker = tf.keras.metrics.Mean("total_loss")
-        self.reconstruction_loss_tracker = tf.keras.metrics.Mean("reconstruction_loss")
-        self.kl_loss_tracker = tf.keras.metrics.Mean("kl_loss")
 
     def call(self, inputs, training=False):
         """Forward Pass."""
@@ -126,15 +118,20 @@ class ConditionalVAE(tf.keras.Model):
     def compile(self, optimizer):
         super().compile()
         self.optimizer = optimizer
-        self.reconstruction_loss_fn = tf.keras.losses.BinaryCrossentropy(
-            from_logits=True
-        )
+        self.total_loss_tracker = tf.keras.metrics.Mean("total_loss")
+        self.reconstruction_loss_tracker = tf.keras.metrics.Mean("reconstruction_loss")
+        self.kl_loss_tracker = tf.keras.metrics.Mean("kl_loss")
 
     def train_step(self, data):
         images, labels = data
         with tf.GradientTape() as tape:
             mean, logvar, logits = self([images, labels])
-            reconstruction_loss = self.reconstruction_loss_fn(images, logits)
+            reconstruction_loss = tf.reduce_mean(
+                tf.reduce_sum(
+                    tf.keras.losses.binary_crossentropy(images, tf.nn.sigmoid(logits)),
+                    axis=(1, 2),
+                )
+            )
             kl_loss = -0.5 * (1 + logvar - tf.square(mean) - tf.exp(logvar))
             kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
             total_loss = reconstruction_loss + kl_loss
@@ -156,7 +153,12 @@ class ConditionalVAE(tf.keras.Model):
         images, labels = data
         mean, logvar, logits = self([images, labels], training=False)
 
-        reconstruction_loss = self.reconstruction_loss_fn(images, logits)
+        reconstruction_loss = tf.reduce_mean(
+            tf.reduce_sum(
+                tf.keras.losses.binary_crossentropy(images, tf.nn.sigmoid(logits)),
+                axis=(1, 2),
+            )
+        )
         kl_loss = -0.5 * (1 + logvar - tf.square(mean) - tf.exp(logvar))
         kl_loss = tf.reduce_mean(tf.reduce_sum(kl_loss, axis=1))
         total_loss = reconstruction_loss + kl_loss
